@@ -7,11 +7,11 @@ A real-time network monitor for [Claude Code](https://claude.com/claude-code)'s 
 ![demo placeholder](docs/demo.gif)
 
 ```
-[Opus-4.7] 5h 35% reset@22:13   ⬆ 42K/s             ● 4ms       ← sending prompt
-[Opus-4.7] 5h 35% reset@22:13   ⏳ 2.1s              ● 4ms       ← sent, waiting for response
-[Opus-4.7] 5h 35% reset@22:13   ⬇ 12K/s             ● 4ms       ← streaming back
-[Opus-4.7] 5h 35% reset@22:13   ⬆ 5K/s   ⬇ 8K/s    ● 4ms       ← both directions
-[Opus-4.7] 5h 35% reset@22:13                       ● 4ms       ← idle, calm
+[Opus-4.7] ⬆ 42K/s             ● 4ms       ← sending prompt
+[Opus-4.7] ⏳ 2.1s              ● 4ms       ← sent, waiting for response
+[Opus-4.7] ⬇ 12K/s             ● 4ms       ← streaming back
+[Opus-4.7] ⬆ 5K/s   ⬇ 8K/s    ● 4ms       ← both directions
+[Opus-4.7] ● 4ms       ← idle, calm
 ```
 
 ## Why
