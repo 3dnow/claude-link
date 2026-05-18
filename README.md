@@ -4,7 +4,7 @@
 
 A real-time network monitor for [Claude Code](https://claude.com/claude-code)'s statusline. Shows the *actual* state of your API request — uploading prompt, waiting for first byte, streaming response back — with real HTTPS connect-time RTT alongside.
 
-![demo placeholder](docs/demo.gif)
+![claude-link statusline cycling through upload/wait/stream/idle phases](docs/demo.gif)
 
 ```
 [Opus-4.7] ⬆ 42K/s             ● 4ms       ← sending prompt
