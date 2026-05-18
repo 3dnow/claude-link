@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Convenience wrapper — emits the claude-link statusline fragment.
+# For users who want to inject the network indicator into their existing
+# statusline command. Reads $CC_NET_SESSION_ID / $CLAUDE_LINK_SESSION_ID for
+# per-session filtering.
+exec "${CLAUDE_PLUGIN_ROOT}/lib/status-fragment.sh"

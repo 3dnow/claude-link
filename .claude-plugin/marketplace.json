@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-link",
+  "description": "Real-time network monitor for Claude Code's statusline.",
+  "owner": {
+    "name": "mj0011"
+  },
+  "plugins": [
+    {
+      "name": "claude-link",
+      "description": "Per-session network monitor: shows whether your Claude Code API request is uploading, waiting for first byte, streaming back, or stuck — with real HTTPS connect-time RTT alongside.",
+      "category": "monitoring",
+      "source": "./plugins/claude-link",
+      "homepage": "https://github.com/3dnow/claude-link"
+    }
+  ]
+}

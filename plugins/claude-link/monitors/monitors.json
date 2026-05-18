@@ -1,0 +1,7 @@
+[
+  {
+    "name": "claude-link-daemon",
+    "command": "/usr/bin/env python3 \"${CLAUDE_PLUGIN_ROOT}/lib/cc-netd.py\" >/dev/null 2>&1",
+    "description": "claude-link network monitor: samples per-process bytes via nettop, probes HTTPS RTT, writes /tmp/claude-link-status.json"
+  }
+]

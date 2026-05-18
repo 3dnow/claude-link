@@ -1,0 +1,19 @@
+{
+  "name": "claude-link",
+  "description": "Real-time network monitor for Claude Code's statusline. Shows whether your API request is uploading, waiting, streaming back, or stuck — so you stop wondering whether Claude is thinking, your network is slow, or your request just died.",
+  "version": "0.1.0",
+  "author": {
+    "name": "mj0011"
+  },
+  "homepage": "https://github.com/3dnow/claude-link",
+  "repository": "https://github.com/3dnow/claude-link",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "statusline",
+    "network",
+    "monitoring",
+    "latency",
+    "observability"
+  ]
+}

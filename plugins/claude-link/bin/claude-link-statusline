@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Default standalone statusline for users without an existing one.
+# Shows: [Model] 5h% reset@HH:MM   <network fragment>
+# Reads Claude Code's JSON state on stdin.
+input=$(cat)
+
+model=$(echo "$input" | jq -r '.model.display_name // "?"')
+short=$(echo "$model" | sed 's/Claude //; s/ \([0-9]\)/·\1/g; s/·/ /; s/ /-/g')
+
+used=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+reset_ts=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+
+reset=$'\033[0m'; dim=$'\033[2m'; cyan=$'\033[36m'
+yellow=$'\033[33m'; red=$'\033[31m'; green=$'\033[32m'
+
+if [ -n "$used" ]; then
+  pct_int=$(printf "%.0f" "$used")
+  if   [ "$pct_int" -ge 80 ]; then pct_color="$red"
+  elif [ "$pct_int" -ge 50 ]; then pct_color="$yellow"
+  else                              pct_color="$green"
+  fi
+  pct_str=$(printf "%d%%" "$pct_int")
+else
+  pct_color=$'\033[90m'
+  pct_str="—"
+fi
+
+if [ -n "$reset_ts" ] && [ "$reset_ts" != "0" ]; then
+  reset_time=$(date -r "$reset_ts" '+%H:%M' 2>/dev/null || date -d "@$reset_ts" '+%H:%M' 2>/dev/null || echo "?")
+else
+  reset_time="—"
+fi
+
+printf "${dim}[${reset}${cyan}%s${reset}${dim}]${reset} ${dim}5h${reset} ${pct_color}%s${reset} ${dim}reset@${reset}${yellow}%s${reset}" \
+  "$short" "$pct_str" "$reset_time"
+
+# Append the network fragment.
+export CC_NET_SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
+exec "${CLAUDE_PLUGIN_ROOT}/lib/status-fragment.sh"
