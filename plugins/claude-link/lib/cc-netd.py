@@ -71,6 +71,38 @@ def acquire_lock():
     return True
 
 
+def reap_orphan_nettop():
+    """Kill leftover nettop processes that match our spawn signature and have
+    been reparented to init (PPID=1). A daemon killed via SIGKILL can't run
+    cleanup; its child nettop ends up orphaned and burns CPU. This catches
+    them at the next startup. Args match avoids touching a user's
+    interactive nettop."""
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,args="], text=True)
+    except Exception:
+        return
+    killed = 0
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        args = parts[2]
+        if ppid != 1 or "nettop" not in args:
+            continue
+        if "-P" in args and "-L 0" in args and "bytes_in" in args:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed += 1
+            except OSError:
+                pass
+    if killed:
+        log(f"reaped {killed} orphan nettop process(es) from a prior run")
+
+
 def claude_pids():
     """Identify claude-related processes — interactive TUI (comm='claude'),
     versioned bg sessions and bg-pty wrappers (args contain
@@ -138,6 +170,10 @@ class NettopFeed:
                      "-J", "bytes_in,bytes_out", "-x"],
                     stdout=slave_fd, stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL, close_fds=True,
+                    # Own session so we can killpg() the whole group
+                    # cleanly, and so signals to our TUI don't interrupt
+                    # nettop mid-read.
+                    start_new_session=True,
                 )
                 os.close(slave_fd); slave_fd = None
                 reader = os.fdopen(master_fd, "r", encoding="utf-8",
@@ -186,8 +222,22 @@ class NettopFeed:
 
             try: reader.close()
             except Exception: pass
-            try: proc.terminate(); proc.wait(timeout=2)
-            except Exception: pass
+            # Aggressive teardown: SIGTERM the whole group, escalate to
+            # SIGKILL after 1s. Plain proc.terminate() previously let
+            # orphan nettop survive when the parent itself was SIGKILL'd
+            # before this cleanup could run.
+            try: os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                try: proc.terminate()
+                except Exception: pass
+            try: proc.wait(timeout=1)
+            except Exception:
+                try: os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
+                try: proc.wait(timeout=1)
+                except Exception: pass
 
             if self._stop.is_set():
                 return
@@ -327,6 +377,7 @@ def main():
     if not acquire_lock():
         return 0
 
+    reap_orphan_nettop()
     feed = NettopFeed()
     tracker = PidTracker()
 
