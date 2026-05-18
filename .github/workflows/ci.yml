@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validate plugin / marketplace JSON
+        run: |
+          for f in .claude-plugin/marketplace.json plugins/claude-link/.claude-plugin/plugin.json plugins/claude-link/hooks/hooks.json plugins/claude-link/monitors/monitors.json; do
+            echo "::group::$f"
+            python3 -m json.tool < "$f" >/dev/null && echo "ok: $f"
+            echo "::endgroup::"
+          done
+
+      - name: Python syntax check
+        run: python3 -m py_compile plugins/claude-link/lib/cc-netd.py
+
+      - name: Shellcheck bash scripts
+        run: |
+          shellcheck -x \
+            plugins/claude-link/hooks/prompt-submit.sh \
+            plugins/claude-link/hooks/stop.sh \
+            plugins/claude-link/lib/status-fragment.sh \
+            plugins/claude-link/bin/claude-link-fragment \
+            plugins/claude-link/bin/claude-link-statusline \
+            docs/demo.sh
+
+      - name: Unit tests (PidTracker logic)
+        run: python3 -m pytest tests/ -v

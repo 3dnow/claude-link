@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2059
+# (printf format strings contain ANSI escapes from $variables — constants,
+# not user input, so SC2059's injection concern doesn't apply.)
 # Emits a colored network status fragment for Claude Code's statusline.
 # Reads /tmp/claude-link-status.json (written by the daemon).
 #

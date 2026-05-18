@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an addition or change.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: Be concrete about the situation you're in when you wish this existed.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: "Optional. Don't worry about implementability — describe the *user-visible* behavior you'd want."
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: macOS-only is fine
+        - label: Should work on Linux too (someone needs to do the port — see #1)
+        - label: I'd be willing to implement this

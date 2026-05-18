@@ -35,5 +35,6 @@ printf "${dim}[${reset}${cyan}%s${reset}${dim}]${reset} ${dim}5h${reset} ${pct_c
   "$short" "$pct_str" "$reset_time"
 
 # Append the network fragment.
-export CC_NET_SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
+CC_NET_SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
+export CC_NET_SESSION_ID
 exec "${CLAUDE_PLUGIN_ROOT}/lib/status-fragment.sh"

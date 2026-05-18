@@ -1,5 +1,10 @@
 # claude-link
 
+[![CI](https://github.com/3dnow/claude-link/actions/workflows/ci.yml/badge.svg)](https://github.com/3dnow/claude-link/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](#requirements)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-v2.1.105%2B-9146FF)](https://claude.com/claude-code)
+
 > **Stop wondering whether Claude is thinking, your network is slow, or your request just died.**
 
 A real-time network monitor for [Claude Code](https://claude.com/claude-code)'s statusline. Shows the *actual* state of your API request — uploading prompt, waiting for first byte, streaming response back — with real HTTPS connect-time RTT alongside.
@@ -69,6 +74,9 @@ exec claude-link-fragment
 Then **restart Claude Code** to pick up the plugin's hooks and background monitor.
 
 ## How it works
+
+> Full technical write-up of the three Unix traps the implementation hit (DNS-hijacking TUN proxies short-circuiting ICMP, stdio block-buffering when piped vs line-buffering on tty, and subprocess orphans after parent SIGKILL): **[docs/architecture.md](docs/architecture.md)**.
+
 
 ```
 ┌─────────────────┐   ┌──────────────────┐   ┌─────────────────────┐

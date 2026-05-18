@@ -10,7 +10,7 @@ printf '\033[2J\033[H\033[?25l'
 trap "printf '\\033[?25h\\n'" EXIT
 
 reset=$'\033[0m'; dim=$'\033[2m'
-red=$'\033[31m'; green=$'\033[32m'; yellow=$'\033[33m'
+green=$'\033[32m'; yellow=$'\033[33m'
 blue=$'\033[34m'; cyan=$'\033[36m'
 
 header() {
@@ -24,7 +24,6 @@ frame() {
 }
 
 ping_ok="${green}●${reset} ${dim}4.2ms${reset}"
-ping_slow="${yellow}●${reset} ${dim}220ms${reset}"
 
 # Sequences
 loop() {

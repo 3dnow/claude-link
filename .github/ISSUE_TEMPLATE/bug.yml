@@ -1,0 +1,43 @@
+name: Bug report
+description: Something doesn't work the way the README says it should.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Short description. What did you expect, what did you see?
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "e.g. 15.4 (sw_vers -productVersion)"
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude Code version
+      placeholder: "claude --version"
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Daemon log tail
+      description: "Output of `tail -20 ~/.claude/cc-net/cc-netd.log` or `tail -20 $CLAUDE_PLUGIN_DATA/claude-link.log`"
+      render: shell
+  - type: textarea
+    id: status
+    attributes:
+      label: One frame of status JSON
+      description: "Run `jq . /tmp/claude-link-status.json` and paste a sample."
+      render: json
+  - type: textarea
+    id: ps
+    attributes:
+      label: Claude-related processes
+      description: "Output of `ps -axo pid,ppid,etime,%cpu,comm,args | grep -E 'claude|nettop' | grep -v grep`"
+      render: shell
