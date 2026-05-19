@@ -20,6 +20,9 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
+      - name: Install pytest
+        run: python3 -m pip install --upgrade pip pytest
+
       - name: Validate plugin / marketplace JSON
         run: |
           for f in .claude-plugin/marketplace.json plugins/claude-link/.claude-plugin/plugin.json plugins/claude-link/hooks/hooks.json plugins/claude-link/monitors/monitors.json; do
