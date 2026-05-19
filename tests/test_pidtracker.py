@@ -133,3 +133,27 @@ def test_forget_drops_dead_pids():
     t.forget(alive_pids=[100])
     assert 100 in t.last_ts
     assert 200 not in t.last_ts
+
+
+def test_log_rotates_when_over_max_bytes(tmp_path):
+    cc_netd.LOG_FILE = tmp_path / "claude-link.log"
+    cc_netd.LOG_MAX_BYTES = 4
+    cc_netd._last_log_rotate_check = 0.0
+    cc_netd.LOG_FILE.write_text("12345")
+
+    cc_netd.log("new line")
+
+    assert (tmp_path / "claude-link.log.1").read_text() == "12345"
+    assert "new line" in cc_netd.LOG_FILE.read_text()
+
+
+def test_log_rotation_check_is_rate_limited(tmp_path):
+    cc_netd.LOG_FILE = tmp_path / "claude-link.log"
+    cc_netd.LOG_MAX_BYTES = 4
+    cc_netd._last_log_rotate_check = 1000.0
+    cc_netd.LOG_FILE.write_text("12345")
+
+    cc_netd.rotate_log_if_needed(now=1020.0)
+
+    assert cc_netd.LOG_FILE.read_text() == "12345"
+    assert not (tmp_path / "claude-link.log.1").exists()

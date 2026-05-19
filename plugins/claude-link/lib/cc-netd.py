@@ -33,6 +33,8 @@ PIDFILE     = Path("/tmp/claude-link.pid")
 LOG_FILE    = Path(
     os.environ.get("CLAUDE_PLUGIN_DATA", "/tmp")
 ) / "claude-link.log"
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_ROTATE_INTERVAL = 60.0
 
 PROBE_URL       = "https://api.anthropic.com/"
 PROBE_INTERVAL  = 15.0
@@ -47,11 +49,31 @@ WAIT_CAP_SECS   = 60.0
 VIS_HOLD_SECS   = 3.0
 
 _pid_re = re.compile(r"\.(\d+)$")
+_last_log_rotate_check = 0.0
+
+
+def rotate_log_if_needed(now=None):
+    """Rotate the daemon log when it grows too large.
+
+    Keep the current log plus one rotated copy, and rate-limit the size check
+    so the hot logging path does not stat on every call.
+    """
+    global _last_log_rotate_check
+    now = time.time() if now is None else now
+    if now - _last_log_rotate_check < LOG_ROTATE_INTERVAL:
+        return
+    _last_log_rotate_check = now
+    try:
+        if LOG_FILE.stat().st_size > LOG_MAX_BYTES:
+            os.replace(LOG_FILE, Path(str(LOG_FILE) + ".1"))
+    except FileNotFoundError:
+        pass
 
 
 def log(msg):
     try:
         LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        rotate_log_if_needed()
         with LOG_FILE.open("a") as f:
             f.write(f"{datetime.now().isoformat(timespec='seconds')} {msg}\n")
     except Exception:
