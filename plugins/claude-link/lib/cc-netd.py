@@ -190,8 +190,16 @@ class NettopFeed:
                 proc = subprocess.Popen(
                     ["nettop", "-P", "-L", "0", "-s", "1",
                      "-J", "bytes_in,bytes_out", "-x"],
-                    stdout=slave_fd, stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL, close_fds=True,
+                    # stdin MUST be a tty, not /dev/null: nettop installs a
+                    # dispatch read source on stdin to watch for interactive
+                    # keys. /dev/null is perpetually EOF-readable, so that
+                    # source fires in a tight loop and nettop burns ~135% CPU
+                    # for the daemon's whole lifetime. Handing it the PTY slave
+                    # (a tty that blocks on read) drops it to ~0.5%. stdout is
+                    # the same slave — the PTY already exists for line
+                    # buffering; reusing it for stdin costs nothing.
+                    stdin=slave_fd, stdout=slave_fd, stderr=subprocess.DEVNULL,
+                    close_fds=True,
                     # Own session so we can killpg() the whole group
                     # cleanly, and so signals to our TUI don't interrupt
                     # nettop mid-read.
