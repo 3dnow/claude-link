@@ -80,16 +80,55 @@ def log(msg):
         pass
 
 
-def acquire_lock():
-    if PIDFILE.exists():
+def other_daemon_pids():
+    """PIDs of OTHER live claude-link daemons (excludes self). The /tmp pidfile
+    alone is an unreliable singleton: macOS periodic cleanup deletes a
+    long-lived daemon's pidfile (untouched >3 days), after which a fresh start
+    sees no pidfile and runs alongside the still-live one. Scanning ps for the
+    script name is authoritative regardless of pidfile state."""
+    me = os.getpid()
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,args="], text=True)
+    except Exception:
+        return []
+    pids = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
         try:
-            other = int(PIDFILE.read_text().strip())
-            os.kill(other, 0)
-            return False
-        except (OSError, ValueError):
-            pass
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid == me:
+            continue
+        if "cc-netd.py" in parts[1]:
+            pids.append(pid)
+    return pids
+
+
+def _release_pidfile():
+    """Remove the pidfile only if it still points at us — never clobber a
+    sibling that legitimately took over."""
+    try:
+        if PIDFILE.read_text().strip() == str(os.getpid()):
+            PIDFILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def acquire_lock():
+    # Yield to any already-running daemon found via ps (authoritative), not just
+    # via the deletable pidfile. Returns the same exit-0 path the Monitor
+    # already gets from redundant launches; it just no longer lets a stale or
+    # cleaned-up pidfile spawn a second live daemon.
+    if other_daemon_pids():
+        return False
     PIDFILE.write_text(str(os.getpid()))
-    atexit.register(lambda: PIDFILE.unlink(missing_ok=True))
+    atexit.register(_release_pidfile)
     return True
 
 
@@ -391,8 +430,11 @@ class PidTracker:
 
 
 def write_status(data):
+    # Per-pid temp name: a shared "<name>.tmp" lets two daemons (e.g. a startup
+    # overlap window) race on os.replace — one renames it away, the other's
+    # replace ENOENTs every tick and floods the log. Keep it per-writer.
     try:
-        tmp = STATUS_FILE.with_name(STATUS_FILE.name + ".tmp")
+        tmp = STATUS_FILE.with_name(f"{STATUS_FILE.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(data))
         os.replace(tmp, STATUS_FILE)
     except Exception as e:
@@ -426,8 +468,27 @@ def main():
     last_probe_ms = None
     idle_since = time.time()
 
+    last_singleton_check = 0.0
     while True:
         now = time.time()
+
+        # Self-heal the singleton: if a sibling daemon is present (a startup
+        # overlap, or a takeover after our pidfile was cleaned), the higher-pid
+        # one yields so the fleet converges to one. The lowest-pid daemon never
+        # yields, so there is no flapping. Also re-assert the pidfile if it went
+        # missing, so reap/external tooling keeps working.
+        if now - last_singleton_check >= 30.0:
+            last_singleton_check = now
+            others = other_daemon_pids()
+            if others and min(others) < os.getpid():
+                log(f"sibling daemon(s) {sorted(others)} present; yielding")
+                shutdown()
+            try:
+                if PIDFILE.read_text().strip() != str(os.getpid()):
+                    PIDFILE.write_text(str(os.getpid()))
+            except OSError:
+                PIDFILE.write_text(str(os.getpid()))
+
         pids = claude_pids()
         tracker.forget(pids)
 
