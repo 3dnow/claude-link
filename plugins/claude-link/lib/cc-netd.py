@@ -392,6 +392,15 @@ def write_status(data):
 
 
 def main():
+    # Only the CLI TUI renders a statusline, so only there does this daemon have
+    # a consumer. Desktop / SDK / IDE sessions would just spin a nettop child in
+    # the background for output nobody shows. Skip those surfaces.
+    # Fail open: bail only on a positively-identified non-CLI entrypoint, so an
+    # unset/unknown value never disables the daemon for a real CLI user.
+    entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "")
+    if entrypoint and entrypoint != "cli":
+        return 0
+
     # When run as a plugin Monitor, Claude Code manages the process — do not
     # daemonize. Stdout is consumed as notifications, so we keep it silent.
     sys.stdout = open(os.devnull, "w")
