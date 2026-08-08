@@ -12,6 +12,7 @@ generate Claude notifications.
 """
 
 import atexit
+import fcntl
 import glob
 import json
 import os
@@ -20,6 +21,7 @@ import re
 import signal
 import subprocess
 import sys
+import termios
 import threading
 import time
 from datetime import datetime
@@ -195,6 +197,15 @@ def claude_pids():
     return pids
 
 
+def _take_ctty():
+    """preexec_fn: make the PTY slave on fd 0 our controlling terminal.
+    start_new_session=True has already called setsid(), so we have none yet."""
+    try:
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    except OSError:
+        pass
+
+
 class NettopFeed:
     """Spawns `nettop` once in CSV streaming mode via a PTY and parses
     batches. nettop reports cumulative bytes per process; deltas across our
@@ -209,12 +220,28 @@ class NettopFeed:
         self.lock = threading.Lock()
         self.latest: dict = {}
         self.batch_ts = 0.0
+        self._proc_pid = None      # live nettop child, for kill-on-exit
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self):
+        """Stop the feed AND kill the nettop child.
+
+        Setting the event is not enough. The reader thread is a daemon thread
+        parked in a blocking read on the PTY master, so it never reaches the
+        teardown below once the main thread calls sys.exit() — the child is
+        reparented to init and, with the master now closed (stdin permanently
+        ready), goes straight back to the ~135% spin this PR set out to fix.
+        """
         self._stop.set()
+        pid = self._proc_pid
+        if pid:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            self._proc_pid = None
 
     def snapshot(self):
         with self.lock:
@@ -243,7 +270,13 @@ class NettopFeed:
                     # cleanly, and so signals to our TUI don't interrupt
                     # nettop mid-read.
                     start_new_session=True,
+                    # Adopt the PTY as the controlling terminal. Then if we die
+                    # without cleaning up (SIGKILL, crash), closing the master
+                    # makes the kernel SIGHUP nettop rather than leaving it to
+                    # spin on an always-ready stdin.
+                    preexec_fn=_take_ctty,
                 )
+                self._proc_pid = proc.pid
                 os.close(slave_fd); slave_fd = None
                 reader = os.fdopen(master_fd, "r", encoding="utf-8",
                                    errors="replace")
@@ -307,6 +340,7 @@ class NettopFeed:
                     except Exception: pass
                 try: proc.wait(timeout=1)
                 except Exception: pass
+            self._proc_pid = None
 
             if self._stop.is_set():
                 return
@@ -451,6 +485,7 @@ def main():
 
     reap_orphan_nettop()
     feed = NettopFeed()
+    atexit.register(feed.stop)
     tracker = PidTracker()
 
     def shutdown(*_):
@@ -461,6 +496,7 @@ def main():
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGHUP, shutdown)
 
     log(f"start pid={os.getpid()}")
 
