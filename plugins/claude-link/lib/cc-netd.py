@@ -82,6 +82,24 @@ def log(msg):
         pass
 
 
+def _is_daemon_argv(args):
+    """True only for a python process actually running cc-netd.py.
+
+    A bare `"cc-netd.py" in args` substring test also matches any process that
+    merely *mentions* the script — a grep, an editor, a shell invoked with it
+    on its command line. That is not cosmetic: acquire_lock() then refuses to
+    start, and the periodic singleton check makes a healthy daemon shut itself
+    down. Both fail silently, leaving the statusline dead.
+    """
+    toks = args.split()
+    if not toks:
+        return False
+    if not any(os.path.basename(t) == "cc-netd.py" for t in toks):
+        return False
+    exe = os.path.basename(toks[0]).lower()
+    return exe.startswith("python") or exe == "env"
+
+
 def other_daemon_pids():
     """PIDs of OTHER live claude-link daemons (excludes self). The /tmp pidfile
     alone is an unreliable singleton: macOS periodic cleanup deletes a
@@ -107,7 +125,7 @@ def other_daemon_pids():
             continue
         if pid == me:
             continue
-        if "cc-netd.py" in parts[1]:
+        if _is_daemon_argv(parts[1]):
             pids.append(pid)
     return pids
 
