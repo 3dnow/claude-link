@@ -64,9 +64,10 @@ proc = subprocess.Popen(
     ["nettop", "-P", "-L", "0", "-s", "1", "-J", "bytes_in,bytes_out", "-x"],
     stdout=slave_fd,
     stderr=subprocess.DEVNULL,
-    stdin=subprocess.DEVNULL,
+    stdin=slave_fd,          # a tty, NOT /dev/null — see Trap 3
     start_new_session=True,
     close_fds=True,
+    preexec_fn=_take_ctty,   # also Trap 3
 )
 os.close(slave_fd)
 reader = os.fdopen(master_fd, "r", encoding="utf-8", errors="replace")
@@ -84,7 +85,18 @@ It didn't. Killing the daemon with `kill -9` (SIGKILL) left the nettop child rep
 
 Across a few daemon restarts during development, the machine accumulated several orphan nettop processes, each at ~130% CPU. Aggregate: hundreds of percent of CPU, none of it visibly attributable to anything.
 
-Three layers of defense, ordered from "graceful" to "self-healing":
+### Why an orphan burns a core, and why the tty stdin fix has a lifetime
+
+nettop installs a libdispatch read source on **stdin** so it can catch interactive keypresses. Hand it a permanently-ready fd and that source is woken in a tight loop: `sample` shows ~all on-CPU time in `_dispatch_kq_unote_update → _dispatch_kq_poll → kevent_qos`. `/dev/null` is exactly such an fd — perpetually EOF-readable — which is why `stdin=subprocess.DEVNULL` costs ~135% CPU for the child's whole lifetime, and why the snippet above passes the PTY slave instead: a tty blocks on read, so the source idles.
+
+The catch: that fix holds only while **we** are alive, because we hold the PTY *master*. Close the master — i.e. exit — and the slave becomes permanently ready again, so an orphan drops straight back into the spin. Measured on one process, with the master fd as the only variable:
+
+| condition | CPU |
+|---|---|
+| parent alive, draining the master | **1.5%** |
+| master closed (parent gone) | **131.6%**, still running |
+
+So "the child leaks" and "the child burns a core" are the same bug seen from two ends. Four layers of defense, ordered from "graceful" to "self-healing":
 
 ### 3a. `start_new_session=True` on the child
 
@@ -113,9 +125,24 @@ except subprocess.TimeoutExpired:
     proc.wait(timeout=1)
 ```
 
-SIGTERM the group, give it 1s, then SIGKILL the group. This handles the normal shutdown path correctly.
+SIGTERM the group, give it 1s, then SIGKILL the group. This handles the normal shutdown path correctly — *provided it actually runs*.
 
-### 3c. Reap orphans at next startup (the actual self-healing bit)
+It didn't. That teardown lives at the bottom of the reader thread's loop, and the reader is a **daemon thread parked in a blocking read on the PTY master**. When the main thread takes a signal and calls `sys.exit()`, the interpreter tears daemon threads down where they stand; the code below the read never executes. `stop()` setting a `threading.Event` doesn't help either — nothing checks it until the next line arrives, which is never.
+
+The owner of the child must therefore do the killing directly, synchronously, in `stop()`:
+
+```python
+def stop(self):
+    self._stop.set()
+    pid = self._proc_pid          # recorded right after Popen()
+    if pid:
+        try: os.killpg(pid, signal.SIGKILL)
+        except OSError: pass
+```
+
+Register it with `atexit` as well, so every non-SIGKILL exit path is covered rather than just the two signal handlers.
+
+### 3c. Reap orphans at next startup (the safety net)
 
 If the daemon itself dies via SIGKILL — say, an OS killer triggered, or someone running `pkill -9` — no cleanup code runs at all. The child is now orphaned and there's no one to kill it.
 
@@ -145,7 +172,24 @@ End-to-end verification: SIGKILL the daemon, observe the orphan nettop, restart 
 2026-05-18T13:48:15 start pid=55240
 ```
 
-Self-healing.
+Self-healing — but note when it fires: at the *next* daemon start. This daemon exits on purpose 30 minutes after the last Claude Code process disappears, so an orphan it leaks burns a core for exactly as long as you are not using Claude Code. Observed in the wild: three days, from one shutdown to the next session. A safety net, not a fix.
+
+### 3d. Let the kernel do it: give the child a controlling terminal
+
+The real fix for the SIGKILL case is to stop needing our own cleanup code. A PTY already delivers a hangup — we just weren't subscribed to it. `start_new_session=True` puts the child in a fresh session with **no** controlling terminal, so nothing happens to it when the master closes. One ioctl in `preexec_fn` (which runs after the fds are dup'd, so the slave is fd 0) claims it:
+
+```python
+def _take_ctty():
+    """preexec_fn: make the PTY slave on fd 0 our controlling terminal."""
+    try:
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    except OSError:
+        pass
+```
+
+Now the PTY is the child's controlling terminal, so when the master closes the kernel sends **SIGHUP** to the foreground process group and nettop dies on its own — no cleanup code, no cooperation from the parent, works even when the parent is SIGKILL'd. Verified end to end: `kill -9` the daemon, and the child is gone within a second.
+
+The general shape: if you spawn a long-lived child over a PTY, `start_new_session=True` buys you `killpg()` but silently costs you the hangup. Claim the ctty and you get both.
 
 ## Why this matters beyond claude-link
 

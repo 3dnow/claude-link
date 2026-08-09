@@ -12,6 +12,7 @@ generate Claude notifications.
 """
 
 import atexit
+import fcntl
 import glob
 import json
 import os
@@ -20,6 +21,7 @@ import re
 import signal
 import subprocess
 import sys
+import termios
 import threading
 import time
 from datetime import datetime
@@ -80,16 +82,73 @@ def log(msg):
         pass
 
 
-def acquire_lock():
-    if PIDFILE.exists():
+def _is_daemon_argv(args):
+    """True only for a python process actually running cc-netd.py.
+
+    A bare `"cc-netd.py" in args` substring test also matches any process that
+    merely *mentions* the script — a grep, an editor, a shell invoked with it
+    on its command line. That is not cosmetic: acquire_lock() then refuses to
+    start, and the periodic singleton check makes a healthy daemon shut itself
+    down. Both fail silently, leaving the statusline dead.
+    """
+    toks = args.split()
+    if not toks:
+        return False
+    if not any(os.path.basename(t) == "cc-netd.py" for t in toks):
+        return False
+    exe = os.path.basename(toks[0]).lower()
+    return exe.startswith("python") or exe == "env"
+
+
+def other_daemon_pids():
+    """PIDs of OTHER live claude-link daemons (excludes self). The /tmp pidfile
+    alone is an unreliable singleton: macOS periodic cleanup deletes a
+    long-lived daemon's pidfile (untouched >3 days), after which a fresh start
+    sees no pidfile and runs alongside the still-live one. Scanning ps for the
+    script name is authoritative regardless of pidfile state."""
+    me = os.getpid()
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,args="], text=True)
+    except Exception:
+        return []
+    pids = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
         try:
-            other = int(PIDFILE.read_text().strip())
-            os.kill(other, 0)
-            return False
-        except (OSError, ValueError):
-            pass
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid == me:
+            continue
+        if _is_daemon_argv(parts[1]):
+            pids.append(pid)
+    return pids
+
+
+def _release_pidfile():
+    """Remove the pidfile only if it still points at us — never clobber a
+    sibling that legitimately took over."""
+    try:
+        if PIDFILE.read_text().strip() == str(os.getpid()):
+            PIDFILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def acquire_lock():
+    # Yield to any already-running daemon found via ps (authoritative), not just
+    # via the deletable pidfile. Returns the same exit-0 path the Monitor
+    # already gets from redundant launches; it just no longer lets a stale or
+    # cleaned-up pidfile spawn a second live daemon.
+    if other_daemon_pids():
+        return False
     PIDFILE.write_text(str(os.getpid()))
-    atexit.register(lambda: PIDFILE.unlink(missing_ok=True))
+    atexit.register(_release_pidfile)
     return True
 
 
@@ -156,6 +215,15 @@ def claude_pids():
     return pids
 
 
+def _take_ctty():
+    """preexec_fn: make the PTY slave on fd 0 our controlling terminal.
+    start_new_session=True has already called setsid(), so we have none yet."""
+    try:
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    except OSError:
+        pass
+
+
 class NettopFeed:
     """Spawns `nettop` once in CSV streaming mode via a PTY and parses
     batches. nettop reports cumulative bytes per process; deltas across our
@@ -170,12 +238,28 @@ class NettopFeed:
         self.lock = threading.Lock()
         self.latest: dict = {}
         self.batch_ts = 0.0
+        self._proc_pid = None      # live nettop child, for kill-on-exit
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self):
+        """Stop the feed AND kill the nettop child.
+
+        Setting the event is not enough. The reader thread is a daemon thread
+        parked in a blocking read on the PTY master, so it never reaches the
+        teardown below once the main thread calls sys.exit() — the child is
+        reparented to init and, with the master now closed (stdin permanently
+        ready), goes straight back to the ~135% spin this PR set out to fix.
+        """
         self._stop.set()
+        pid = self._proc_pid
+        if pid:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            self._proc_pid = None
 
     def snapshot(self):
         with self.lock:
@@ -190,13 +274,27 @@ class NettopFeed:
                 proc = subprocess.Popen(
                     ["nettop", "-P", "-L", "0", "-s", "1",
                      "-J", "bytes_in,bytes_out", "-x"],
-                    stdout=slave_fd, stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL, close_fds=True,
+                    # stdin MUST be a tty, not /dev/null: nettop installs a
+                    # dispatch read source on stdin to watch for interactive
+                    # keys. /dev/null is perpetually EOF-readable, so that
+                    # source fires in a tight loop and nettop burns ~135% CPU
+                    # for the daemon's whole lifetime. Handing it the PTY slave
+                    # (a tty that blocks on read) drops it to ~0.5%. stdout is
+                    # the same slave — the PTY already exists for line
+                    # buffering; reusing it for stdin costs nothing.
+                    stdin=slave_fd, stdout=slave_fd, stderr=subprocess.DEVNULL,
+                    close_fds=True,
                     # Own session so we can killpg() the whole group
                     # cleanly, and so signals to our TUI don't interrupt
                     # nettop mid-read.
                     start_new_session=True,
+                    # Adopt the PTY as the controlling terminal. Then if we die
+                    # without cleaning up (SIGKILL, crash), closing the master
+                    # makes the kernel SIGHUP nettop rather than leaving it to
+                    # spin on an always-ready stdin.
+                    preexec_fn=_take_ctty,
                 )
+                self._proc_pid = proc.pid
                 os.close(slave_fd); slave_fd = None
                 reader = os.fdopen(master_fd, "r", encoding="utf-8",
                                    errors="replace")
@@ -260,6 +358,7 @@ class NettopFeed:
                     except Exception: pass
                 try: proc.wait(timeout=1)
                 except Exception: pass
+            self._proc_pid = None
 
             if self._stop.is_set():
                 return
@@ -383,8 +482,11 @@ class PidTracker:
 
 
 def write_status(data):
+    # Per-pid temp name: a shared "<name>.tmp" lets two daemons (e.g. a startup
+    # overlap window) race on os.replace — one renames it away, the other's
+    # replace ENOENTs every tick and floods the log. Keep it per-writer.
     try:
-        tmp = STATUS_FILE.with_name(STATUS_FILE.name + ".tmp")
+        tmp = STATUS_FILE.with_name(f"{STATUS_FILE.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(data))
         os.replace(tmp, STATUS_FILE)
     except Exception as e:
@@ -401,6 +503,7 @@ def main():
 
     reap_orphan_nettop()
     feed = NettopFeed()
+    atexit.register(feed.stop)
     tracker = PidTracker()
 
     def shutdown(*_):
@@ -411,6 +514,7 @@ def main():
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGHUP, shutdown)
 
     log(f"start pid={os.getpid()}")
 
@@ -418,8 +522,27 @@ def main():
     last_probe_ms = None
     idle_since = time.time()
 
+    last_singleton_check = 0.0
     while True:
         now = time.time()
+
+        # Self-heal the singleton: if a sibling daemon is present (a startup
+        # overlap, or a takeover after our pidfile was cleaned), the higher-pid
+        # one yields so the fleet converges to one. The lowest-pid daemon never
+        # yields, so there is no flapping. Also re-assert the pidfile if it went
+        # missing, so reap/external tooling keeps working.
+        if now - last_singleton_check >= 30.0:
+            last_singleton_check = now
+            others = other_daemon_pids()
+            if others and min(others) < os.getpid():
+                log(f"sibling daemon(s) {sorted(others)} present; yielding")
+                shutdown()
+            try:
+                if PIDFILE.read_text().strip() != str(os.getpid()):
+                    PIDFILE.write_text(str(os.getpid()))
+            except OSError:
+                PIDFILE.write_text(str(os.getpid()))
+
         pids = claude_pids()
         tracker.forget(pids)
 
